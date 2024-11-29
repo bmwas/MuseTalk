@@ -132,62 +132,73 @@ class Avatar:
                 input_mask_list = sorted(input_mask_list, key=lambda x: int(os.path.splitext(os.path.basename(x))[0]))
                 self.mask_list_cycle = read_imgs(input_mask_list)
     
-    def prepare_material(self):
-        print("preparing data materials ... ...")
-        with open(self.avatar_info_path, "w") as f:
-            json.dump(self.avatar_info, f)
-            
-        if os.path.isfile(self.video_path):
-            video2imgs(self.video_path, self.full_imgs_path, ext = 'png')
-        else:
-            print(f"copy files in {self.video_path}")
-            files = os.listdir(self.video_path)
-            files.sort()
-            files = [file for file in files if file.split(".")[-1]=="png"]
-            for filename in files:
-                shutil.copyfile(f"{self.video_path}/{filename}", f"{self.full_imgs_path}/{filename}")
-        input_img_list = sorted(glob.glob(os.path.join(self.full_imgs_path, '*.[jpJP][pnPN]*[gG]')))
+def prepare_material(self):
+    print("preparing data materials ... ...")
+    with open(self.avatar_info_path, "w") as f:
+        json.dump(self.avatar_info, f)
         
-        print("extracting landmarks...")
-        coord_list, frame_list = get_landmark_and_bbox(input_img_list, self.bbox_shift)
-        input_latent_list = []
-        idx = -1
-        # maker if the bbox is not sufficient 
-        coord_placeholder = (0.0,0.0,0.0,0.0)
-        for bbox, frame in zip(coord_list, frame_list):
-            idx = idx + 1
-            if bbox == coord_placeholder:
-                continue
-            x1, y1, x2, y2 = bbox
-            crop_frame = frame[y1:y2, x1:x2]
-            resized_crop_frame = cv2.resize(crop_frame,(256,256),interpolation = cv2.INTER_LANCZOS4)
-            latents = vae.get_latents_for_unet(resized_crop_frame)
-            input_latent_list.append(latents)
+    if os.path.isfile(self.video_path):
+        video2imgs(self.video_path, self.full_imgs_path, ext='png')
+    else:
+        print(f"copy files in {self.video_path}")
+        files = os.listdir(self.video_path)
+        files.sort()
+        files = [file for file in files if file.split(".")[-1] == "png"]
+        for filename in files:
+            shutil.copyfile(f"{self.video_path}/{filename}", f"{self.full_imgs_path}/{filename}")
+    input_img_list = sorted(glob.glob(os.path.join(self.full_imgs_path, '*.[jpJP][pnPN]*[gG]')))
+    
+    print("extracting landmarks...")
+    coord_list, frame_list = get_landmark_and_bbox(input_img_list, self.bbox_shift)
+    input_latent_list = []
+    idx = -1
+    coord_placeholder = (0.0, 0.0, 0.0, 0.0)
+    for bbox, frame in zip(coord_list, frame_list):
+        idx += 1
+        if bbox == coord_placeholder:
+            continue
+        x1, y1, x2, y2 = bbox
+        h, w = frame.shape[:2]
+        # Convert coordinates to integers
+        x1, y1, x2, y2 = map(int, map(round, [x1, y1, x2, y2]))
+        # Ensure coordinates are within image bounds
+        x1 = max(0, min(x1, w))
+        x2 = max(0, min(x2, w))
+        y1 = max(0, min(y1, h))
+        y2 = max(0, min(y2, h))
+        if x1 >= x2 or y1 >= y2:
+            print(f"Invalid bbox at index {idx}: {bbox}")
+            continue
+        crop_frame = frame[y1:y2, x1:x2]
+        if crop_frame.size == 0:
+            print(f"Empty crop_frame at index {idx}: {bbox}")
+            continue
+        resized_crop_frame = cv2.resize(crop_frame, (256, 256), interpolation=cv2.INTER_LANCZOS4)
+        latents = vae.get_latents_for_unet(resized_crop_frame)
+        input_latent_list.append(latents)
 
-        self.frame_list_cycle = frame_list + frame_list[::-1]
-        self.coord_list_cycle = coord_list + coord_list[::-1]
-        self.input_latent_list_cycle = input_latent_list + input_latent_list[::-1]
-        self.mask_coords_list_cycle = []
-        self.mask_list_cycle = []
+    self.frame_list_cycle = frame_list + frame_list[::-1]
+    self.coord_list_cycle = coord_list + coord_list[::-1]
+    self.input_latent_list_cycle = input_latent_list + input_latent_list[::-1]
+    self.mask_coords_list_cycle = []
+    self.mask_list_cycle = []
 
-        for i,frame in enumerate(tqdm(self.frame_list_cycle)):
-            cv2.imwrite(f"{self.full_imgs_path}/{str(i).zfill(8)}.png",frame)
-            
-            face_box = self.coord_list_cycle[i]
-            mask,crop_box = get_image_prepare_material(frame,face_box)
-            cv2.imwrite(f"{self.mask_out_path}/{str(i).zfill(8)}.png",mask)
-            self.mask_coords_list_cycle += [crop_box]
-            self.mask_list_cycle.append(mask)
-            
-        with open(self.mask_coords_path, 'wb') as f:
-            pickle.dump(self.mask_coords_list_cycle, f)
-
-        with open(self.coords_path, 'wb') as f:
-            pickle.dump(self.coord_list_cycle, f)
-            
-        torch.save(self.input_latent_list_cycle, os.path.join(self.latents_out_path)) 
-        #     
+    for i, frame in enumerate(tqdm(self.frame_list_cycle)):
+        cv2.imwrite(f"{self.full_imgs_path}/{str(i).zfill(8)}.png", frame)
+        face_box = self.coord_list_cycle[i]
+        mask, crop_box = get_image_prepare_material(frame, face_box)
+        cv2.imwrite(f"{self.mask_out_path}/{str(i).zfill(8)}.png", mask)
+        self.mask_coords_list_cycle.append(crop_box)
+        self.mask_list_cycle.append(mask)
         
+    with open(self.mask_coords_path, 'wb') as f:
+        pickle.dump(self.mask_coords_list_cycle, f)
+
+    with open(self.coords_path, 'wb') as f:
+        pickle.dump(self.coord_list_cycle, f)
+        
+    torch.save(self.input_latent_list_cycle, os.path.join(self.latents_out_path))
+
     def process_frames(self, 
                        res_frame_queue,
                        video_len,
