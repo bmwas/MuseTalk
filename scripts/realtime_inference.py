@@ -24,6 +24,10 @@ import time
 # load model weights
 audio_processor, vae, unet, pe = load_all_model()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+if torch.cuda.is_available():
+    print("GPU available .........")
+else:
+    print("STOP GPU NOT available!!")
 timesteps = torch.tensor([0], device=device)
 pe = pe.half()
 vae.vae = vae.vae.half()
