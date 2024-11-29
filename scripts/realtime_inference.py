@@ -130,7 +130,7 @@ class Avatar:
             json.dump(self.avatar_info, f)
 
         if os.path.isfile(self.video_path):
-            video2imgs(self.video_path, self.full_imgs_path, ext='png')
+            video2imgs(self.video_path, self.full_imgs_path, ext='.png')
         else:
             print(f"Copying files from {self.video_path}")
             files = sorted([f for f in os.listdir(self.video_path) if f.lower().endswith(".png")])
@@ -155,14 +155,24 @@ class Avatar:
 
             # Detect landmarks and get bounding box
             bbox = self.get_landmark_and_bbox_single_image(img)
-            if bbox == coord_placeholder:
+            if bbox == (0, 0, 0, 0):
                 print(f"No face detected in image: {img_path}")
                 continue
 
-            coord_list.append(bbox)
             x1, y1, x2, y2 = bbox
 
-            # Crop and resize the face region
+            # Ensure coordinates are within image bounds
+            img_height, img_width = img.shape[:2]
+            x1 = max(0, min(x1, img_width - 1))
+            x2 = max(0, min(x2, img_width - 1))
+            y1 = max(0, min(y1, img_height - 1))
+            y2 = max(0, min(y2, img_height - 1))
+
+            # Ensure that x1 < x2 and y1 < y2
+            if x1 >= x2 or y1 >= y2:
+                print(f"Invalid bounding box for image: {img_path}")
+                continue
+
             crop_frame = img[y1:y2, x1:x2]
             if crop_frame.size == 0:
                 print(f"Empty crop for image: {img_path}")
@@ -182,6 +192,9 @@ class Avatar:
             mask_path = os.path.join(self.mask_out_path, f'{str(idx).zfill(8)}.png')
             cv2.imwrite(mask_path, mask)
             mask_coords_list.append(crop_box)
+
+            # Save the full image (if needed)
+            cv2.imwrite(os.path.join(self.full_imgs_path, f'{str(idx).zfill(8)}.png'), img)
 
             # Clear variables to free memory
             del img, crop_frame, resized_crop_frame, latents, mask
@@ -211,7 +224,17 @@ class Avatar:
             return coord_placeholder
         else:
             top, right, bottom, left = face_locations[0]
-            x1, y1, x2, y2 = left, top, right, bottom
+            # Adjust the bounding box with bbox_shift
+            x1 = int(max(left - self.bbox_shift, 0))
+            y1 = int(max(top - self.bbox_shift, 0))
+            x2 = int(min(right + self.bbox_shift, img.shape[1] - 1))
+            y2 = int(min(bottom + self.bbox_shift, img.shape[0] - 1))
+
+            # Ensure that x1 < x2 and y1 < y2
+            if x1 >= x2 or y1 >= y2:
+                print(f"Invalid adjusted bbox for image.")
+                return coord_placeholder
+
             return (x1, y1, x2, y2)
 
     def process_frames(self, res_frame_queue, video_len, skip_save_images):
