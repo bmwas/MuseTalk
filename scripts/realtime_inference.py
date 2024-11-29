@@ -200,6 +200,9 @@ class Avatar:
             del img, crop_frame, resized_crop_frame, latents, mask
             gc.collect()
 
+            # Append the bounding box to the list
+            coord_list.append((x1, y1, x2, y2))
+
         # Save coordinate lists to disk
         with open(self.coords_path, 'wb') as f:
             pickle.dump(coord_list, f)
@@ -210,8 +213,6 @@ class Avatar:
 
     def get_landmark_and_bbox_single_image(self, img):
         # This function detects face landmarks and returns the bounding box
-        # Replace this with your actual face detection code
-        # For now, let's assume we are using face_recognition library
         coord_placeholder = (0, 0, 0, 0)
         try:
             import face_recognition
@@ -224,18 +225,25 @@ class Avatar:
             return coord_placeholder
         else:
             top, right, bottom, left = face_locations[0]
+
             # Adjust the bounding box with bbox_shift
-            x1 = int(max(left - self.bbox_shift, 0))
-            y1 = int(max(top - self.bbox_shift, 0))
-            x2 = int(min(right + self.bbox_shift, img.shape[1] - 1))
-            y2 = int(min(bottom + self.bbox_shift, img.shape[0] - 1))
+            # Apply the adjustment to ensure the upper bound does not fall below zero
+            x1 = max(0, left - self.bbox_shift)
+            y1 = max(0, top - self.bbox_shift)
+            x2 = right + self.bbox_shift
+            y2 = bottom + self.bbox_shift
+
+            # Ensure that x2 and y2 do not exceed image dimensions
+            img_height, img_width = img.shape[:2]
+            x2 = min(x2, img_width - 1)
+            y2 = min(y2, img_height - 1)
 
             # Ensure that x1 < x2 and y1 < y2
             if x1 >= x2 or y1 >= y2:
                 print(f"Invalid adjusted bbox for image.")
                 return coord_placeholder
 
-            return (x1, y1, x2, y2)
+            return (int(x1), int(y1), int(x2), int(y2))
 
     def process_frames(self, res_frame_queue, video_len, skip_save_images):
         print(f"Total frames to process: {video_len}")
