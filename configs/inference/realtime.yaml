@@ -1,6 +1,6 @@
 avator_1:
  preparation: True
  bbox_shift: 5
- video_path: "/app/vllm/virtualhumans/MuseTalk/data/video/obama_2020_25fs.mp4"
+ video_path: "/app/vllm/virtualhumans/MuseTalk/data/video/obama_2020_short_25fs.mp4"
  audio_clips:
-     audio_0: "/app/vllm/virtualhumans/MuseTalk/data/audio/obama_2020_25fs.wav" 
+     audio_0: "/app/vllm/virtualhumans/MuseTalk/data/audio/obama_2020_short_25fs.wav" 
