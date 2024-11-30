@@ -46,7 +46,7 @@ def video2imgs(vid_path, save_path, ext='.png', cut_frame=10000000):
 
 def osmakedirs(path_list):
     for path in path_list:
-        os.makedirs(path) if not os.path.exists(path) else None
+        os.makedirs(path, exist_ok=True)
 
 
 @torch.no_grad()
@@ -62,7 +62,7 @@ class Avatar:
         self.video_out_path = f"{self.avatar_path}/vid_output/"
         self.mask_out_path = f"{self.avatar_path}/mask"
         self.mask_coords_path = f"{self.avatar_path}/mask_coords.pkl"
-        self.avatar_info_path = f"{self.avatar_path}/avator_info.json"
+        self.avatar_info_path = f"{self.avatar_path}/avatar_info.json"
         self.avatar_info = {
             "avatar_id": avatar_id,
             "video_path": video_path,
@@ -85,19 +85,7 @@ class Avatar:
                     osmakedirs([self.avatar_path, self.full_imgs_path, self.video_out_path, self.mask_out_path])
                     self.prepare_material()
                 else:
-                    self.input_latent_list_cycle = torch.load(self.latents_out_path)
-                    with open(self.coords_path, 'rb') as f:
-                        self.coord_list_cycle = pickle.load(f)
-                    input_img_list = glob.glob(os.path.join(self.full_imgs_path, '*.[jpJP][pnPN]*[gG]'))
-                    input_img_list = sorted(
-                        input_img_list, key=lambda x: int(os.path.splitext(os.path.basename(x))[0]))
-                    self.frame_list_cycle = read_imgs(input_img_list)
-                    with open(self.mask_coords_path, 'rb') as f:
-                        self.mask_coords_list_cycle = pickle.load(f)
-                    input_mask_list = glob.glob(os.path.join(self.mask_out_path, '*.[jpJP][pnPN]*[gG]'))
-                    input_mask_list = sorted(
-                        input_mask_list, key=lambda x: int(os.path.splitext(os.path.basename(x))[0]))
-                    self.mask_list_cycle = read_imgs(input_mask_list)
+                    self.load_materials()
             else:
                 print("*********************************")
                 print(f"  Creating avatar: {self.avatar_id}")
@@ -124,19 +112,22 @@ class Avatar:
                 else:
                     sys.exit()
             else:
-                self.input_latent_list_cycle = torch.load(self.latents_out_path)
-                with open(self.coords_path, 'rb') as f:
-                    self.coord_list_cycle = pickle.load(f)
-                input_img_list = glob.glob(os.path.join(self.full_imgs_path, '*.[jpJP][pnPN]*[gG]'))
-                input_img_list = sorted(
-                    input_img_list, key=lambda x: int(os.path.splitext(os.path.basename(x))[0]))
-                self.frame_list_cycle = read_imgs(input_img_list)
-                with open(self.mask_coords_path, 'rb') as f:
-                    self.mask_coords_list_cycle = pickle.load(f)
-                input_mask_list = glob.glob(os.path.join(self.mask_out_path, '*.[jpJP][pnPN]*[gG]'))
-                input_mask_list = sorted(
-                    input_mask_list, key=lambda x: int(os.path.splitext(os.path.basename(x))[0]))
-                self.mask_list_cycle = read_imgs(input_mask_list)
+                self.load_materials()
+
+    def load_materials(self):
+        self.input_latent_list_cycle = torch.load(self.latents_out_path)
+        with open(self.coords_path, 'rb') as f:
+            self.coord_list_cycle = pickle.load(f)
+        input_img_list = glob.glob(os.path.join(self.full_imgs_path, '*.[jpJP][pnPN]*[gG]'))
+        input_img_list = sorted(
+            input_img_list, key=lambda x: int(os.path.splitext(os.path.basename(x))[0]))
+        self.frame_list_cycle = read_imgs(input_img_list)
+        with open(self.mask_coords_path, 'rb') as f:
+            self.mask_coords_list_cycle = pickle.load(f)
+        input_mask_list = glob.glob(os.path.join(self.mask_out_path, '*.[jpJP][pnPN]*[gG]'))
+        input_mask_list = sorted(
+            input_mask_list, key=lambda x: int(os.path.splitext(os.path.basename(x))[0]))
+        self.mask_list_cycle = read_imgs(input_mask_list)
 
     def prepare_material(self):
         print("Preparing data materials ...")
@@ -149,7 +140,7 @@ class Avatar:
             print(f"Copying files from {self.video_path}")
             files = os.listdir(self.video_path)
             files.sort()
-            files = [file for file in files if file.split(".")[-1] == "png"]
+            files = [file for file in files if file.split(".")[-1].lower() == "png"]
             for filename in files:
                 shutil.copyfile(f"{self.video_path}/{filename}", f"{self.full_imgs_path}/{filename}")
         input_img_list = sorted(glob.glob(os.path.join(self.full_imgs_path, '*.[jpJP][pnPN]*[gG]')))
@@ -230,12 +221,13 @@ class Avatar:
             x1, y1, x2, y2 = bbox
             try:
                 res_frame = cv2.resize(res_frame.astype(np.uint8), (x2 - x1, y2 - y1))
+                mask = self.mask_list_cycle[self.idx % len(self.mask_list_cycle)]
+                mask_crop_box = self.mask_coords_list_cycle[self.idx % len(self.mask_coords_list_cycle)]
+                combine_frame = get_image_blending(ori_frame, res_frame, bbox, mask, mask_crop_box)
             except Exception as e:
-                print(f"Error resizing frame at idx {self.idx}: {e}")
+                print(f"Error processing frame at idx {self.idx}: {e}")
+                self.idx += 1
                 continue
-            mask = self.mask_list_cycle[self.idx % len(self.mask_list_cycle)]
-            mask_crop_box = self.mask_coords_list_cycle[self.idx % len(self.mask_coords_list_cycle)]
-            combine_frame = get_image_blending(ori_frame, res_frame, bbox, mask, mask_crop_box)
 
             if not skip_save_images:
                 cv2.imwrite(f"{self.avatar_path}/tmp/{str(self.idx).zfill(8)}.png", combine_frame)
@@ -267,18 +259,20 @@ class Avatar:
         start_time = time.time()
 
         for i, (whisper_batch, latent_batch) in enumerate(tqdm(gen, total=int(np.ceil(float(video_num) / self.batch_size)))):
-            audio_feature_batch = torch.from_numpy(whisper_batch)
-            audio_feature_batch = audio_feature_batch.to(device=unet.device,
-                                                         dtype=unet.model.dtype)
+            audio_feature_batch = torch.from_numpy(whisper_batch).to(device=unet.device, dtype=torch.float16)
             audio_feature_batch = pe(audio_feature_batch)
-            latent_batch = latent_batch.to(dtype=unet.model.dtype)
+            latent_batch = latent_batch.to(device=unet.device, dtype=torch.float16)
 
             pred_latents = unet.model(latent_batch,
                                       timesteps,
                                       encoder_hidden_states=audio_feature_batch).sample
             recon = vae.decode_latents(pred_latents)
             for res_frame in recon:
-                res_frame_queue.put(res_frame)
+                res_frame_queue.put(res_frame.cpu().numpy())  # Move to CPU and convert to NumPy
+            # Free up GPU memory
+            del pred_latents
+            del recon
+            torch.cuda.empty_cache()
 
         # Close the queue and sub-thread after all tasks are completed
         process_thread.join()
@@ -329,7 +323,7 @@ if __name__ == "__main__":
                         )
     parser.add_argument("--batch_size",
                         type=int,
-                        default=4,
+                        default=1,  # Reduced batch size to prevent CUDA OOM
                         )
     parser.add_argument("--skip_save_images",
                         action="store_true",
@@ -337,6 +331,9 @@ if __name__ == "__main__":
                         )
 
     args = parser.parse_args()
+
+    # Set PyTorch memory allocation config to prevent fragmentation
+    os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:128'
 
     inference_config = OmegaConf.load(args.inference_config)
     print(inference_config)
