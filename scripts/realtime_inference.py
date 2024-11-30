@@ -1,25 +1,22 @@
 import argparse
 import os
-from omegaconf import OmegaConf
+import sys
+import shutil
+import threading
+import queue
+import time
+import copy
+import glob
+import pickle
 import numpy as np
 import cv2
 import torch
-import glob
-import pickle
-import sys
 from tqdm import tqdm
-import copy
+from omegaconf import OmegaConf
 import json
-from musetalk.utils.utils import get_file_type, get_video_fps, datagen
-from musetalk.utils.preprocessing import get_landmark_and_bbox, read_imgs, coord_placeholder
-from musetalk.utils.blending import get_image, get_image_prepare_material, get_image_blending
-from musetalk.utils.utils import load_all_model
-import shutil
-
-import threading
-import queue
-
-import time
+from musetalk.utils.utils import get_file_type, get_video_fps, datagen, load_all_model
+from musetalk.utils.preprocessing import get_landmark_and_bbox, read_imgs
+from musetalk.utils.blending import get_image_prepare_material, get_image_blending
 
 # Load model weights
 audio_processor, vae, unet, pe = load_all_model()
@@ -38,10 +35,11 @@ def video2imgs(vid_path, save_path, ext='.png', cut_frame=10000000):
             break
         ret, frame = cap.read()
         if ret:
-            cv2.imwrite(f"{save_path}/{count:08d}.png", frame)
+            cv2.imwrite(f"{save_path}/{count:08d}{ext}", frame)
             count += 1
         else:
             break
+    cap.release()
 
 
 def osmakedirs(path_list):
@@ -115,19 +113,34 @@ class Avatar:
                 self.load_materials()
 
     def load_materials(self):
+        # Load materials
         self.input_latent_list_cycle = torch.load(self.latents_out_path)
         with open(self.coords_path, 'rb') as f:
             self.coord_list_cycle = pickle.load(f)
-        input_img_list = glob.glob(os.path.join(self.full_imgs_path, '*.[jpJP][pnPN]*[gG]'))
-        input_img_list = sorted(
-            input_img_list, key=lambda x: int(os.path.splitext(os.path.basename(x))[0]))
+        input_img_list = sorted(glob.glob(os.path.join(self.full_imgs_path, '*.[jpJP][pnPN]*[gG]')),
+                                key=lambda x: int(os.path.splitext(os.path.basename(x))[0]))
         self.frame_list_cycle = read_imgs(input_img_list)
         with open(self.mask_coords_path, 'rb') as f:
             self.mask_coords_list_cycle = pickle.load(f)
-        input_mask_list = glob.glob(os.path.join(self.mask_out_path, '*.[jpJP][pnPN]*[gG]'))
-        input_mask_list = sorted(
-            input_mask_list, key=lambda x: int(os.path.splitext(os.path.basename(x))[0]))
+        input_mask_list = sorted(glob.glob(os.path.join(self.mask_out_path, '*.[jpJP][pnPN]*[gG]')),
+                                 key=lambda x: int(os.path.splitext(os.path.basename(x))[0]))
         self.mask_list_cycle = read_imgs(input_mask_list)
+
+        # Validate and filter materials
+        valid_indices = []
+        for idx, bbox in enumerate(self.coord_list_cycle):
+            x1, y1, x2, y2 = bbox
+            if x2 <= x1 or y2 <= y1:
+                print(f"Invalid bbox at idx {idx}: {bbox}")
+                continue
+            valid_indices.append(idx)
+
+        # Filter lists based on valid indices
+        self.coord_list_cycle = [self.coord_list_cycle[i] for i in valid_indices]
+        self.frame_list_cycle = [self.frame_list_cycle[i] for i in valid_indices]
+        self.mask_coords_list_cycle = [self.mask_coords_list_cycle[i] for i in valid_indices]
+        self.mask_list_cycle = [self.mask_list_cycle[i] for i in valid_indices]
+        self.input_latent_list_cycle = [self.input_latent_list_cycle[i] for i in valid_indices]
 
     def prepare_material(self):
         print("Preparing data materials ...")
@@ -135,19 +148,22 @@ class Avatar:
             json.dump(self.avatar_info, f)
 
         if os.path.isfile(self.video_path):
-            video2imgs(self.video_path, self.full_imgs_path, ext='png')
+            video2imgs(self.video_path, self.full_imgs_path, ext='.png')
         else:
             print(f"Copying files from {self.video_path}")
             files = os.listdir(self.video_path)
             files.sort()
-            files = [file for file in files if file.split(".")[-1].lower() == "png"]
+            files = [file for file in files if file.lower().endswith(".png")]
             for filename in files:
                 shutil.copyfile(f"{self.video_path}/{filename}", f"{self.full_imgs_path}/{filename}")
-        input_img_list = sorted(glob.glob(os.path.join(self.full_imgs_path, '*.[jpJP][pnPN]*[gG]')))
+        input_img_list = sorted(glob.glob(os.path.join(self.full_imgs_path, '*.[jpJP][pnPN]*[gG]')),
+                                key=lambda x: int(os.path.splitext(os.path.basename(x))[0]))
 
         print("Extracting landmarks...")
         coord_list, frame_list = get_landmark_and_bbox(input_img_list, self.bbox_shift)
         input_latent_list = []
+        valid_coord_list = []
+        valid_frame_list = []
         idx = -1
         # Marker if the bbox is not sufficient
         coord_placeholder = (0.0, 0.0, 0.0, 0.0)
@@ -179,9 +195,12 @@ class Avatar:
             resized_crop_frame = cv2.resize(crop_frame, (256, 256), interpolation=cv2.INTER_LANCZOS4)
             latents = vae.get_latents_for_unet(resized_crop_frame)
             input_latent_list.append(latents)
+            valid_coord_list.append(bbox)
+            valid_frame_list.append(frame)
 
-        self.frame_list_cycle = frame_list + frame_list[::-1]
-        self.coord_list_cycle = coord_list + coord_list[::-1]
+        # Use only valid frames and coordinates
+        self.frame_list_cycle = valid_frame_list + valid_frame_list[::-1]
+        self.coord_list_cycle = valid_coord_list + valid_coord_list[::-1]
         self.input_latent_list_cycle = input_latent_list + input_latent_list[::-1]
         self.mask_coords_list_cycle = []
         self.mask_list_cycle = []
@@ -192,7 +211,7 @@ class Avatar:
             face_box = self.coord_list_cycle[i]
             mask, crop_box = get_image_prepare_material(frame, face_box)
             cv2.imwrite(f"{self.mask_out_path}/{str(i).zfill(8)}.png", mask)
-            self.mask_coords_list_cycle += [crop_box]
+            self.mask_coords_list_cycle.append(crop_box)
             self.mask_list_cycle.append(mask)
 
         with open(self.mask_coords_path, 'wb') as f:
@@ -209,20 +228,34 @@ class Avatar:
                        skip_save_images):
         print(f"Total frames to process: {video_len}")
         while True:
-            if self.idx >= video_len - 1:
+            if self.idx >= video_len:
                 break
             try:
                 res_frame = res_frame_queue.get(block=True, timeout=1)
             except queue.Empty:
                 continue
 
-            bbox = self.coord_list_cycle[self.idx % len(self.coord_list_cycle)]
-            ori_frame = copy.deepcopy(self.frame_list_cycle[self.idx % len(self.frame_list_cycle)])
+            idx_in_cycle = self.idx % len(self.coord_list_cycle)
+            bbox = self.coord_list_cycle[idx_in_cycle]
+            ori_frame = copy.deepcopy(self.frame_list_cycle[idx_in_cycle])
             x1, y1, x2, y2 = bbox
+
+            # Ensure valid dimensions
+            width = x2 - x1
+            height = y2 - y1
+            if width <= 0 or height <= 0:
+                print(f"Invalid dimensions at idx {self.idx}: width={width}, height={height}")
+                self.idx += 1
+                continue
+
             try:
-                res_frame = cv2.resize(res_frame.astype(np.uint8), (x2 - x1, y2 - y1))
-                mask = self.mask_list_cycle[self.idx % len(self.mask_list_cycle)]
-                mask_crop_box = self.mask_coords_list_cycle[self.idx % len(self.mask_coords_list_cycle)]
+                res_frame = res_frame.astype(np.uint8)
+                if res_frame.ndim == 2:
+                    res_frame = cv2.cvtColor(res_frame, cv2.COLOR_GRAY2BGR)
+                res_frame = cv2.resize(res_frame, (width, height))
+
+                mask = self.mask_list_cycle[idx_in_cycle]
+                mask_crop_box = self.mask_coords_list_cycle[idx_in_cycle]
                 combine_frame = get_image_blending(ori_frame, res_frame, bbox, mask, mask_crop_box)
             except Exception as e:
                 print(f"Error processing frame at idx {self.idx}: {e}")
