@@ -268,7 +268,7 @@ class Avatar:
                                       encoder_hidden_states=audio_feature_batch).sample
             recon = vae.decode_latents(pred_latents)
             for res_frame in recon:
-                res_frame_queue.put(res_frame.cpu().numpy())  # Move to CPU and convert to NumPy
+                res_frame_queue.put(res_frame)  # Removed .cpu().numpy()
             # Free up GPU memory
             del pred_latents
             del recon
