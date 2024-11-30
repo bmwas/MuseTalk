@@ -210,7 +210,14 @@ class Avatar:
 
             face_box = self.coord_list_cycle[i]
             mask, crop_box = get_image_prepare_material(frame, face_box)
-            cv2.imwrite(f"{self.mask_out_path}/{str(i).zfill(8)}.png", mask)
+
+            # Ensure mask is saved with correct channels
+            if mask.ndim == 2:
+                mask_to_save = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+            else:
+                mask_to_save = mask
+            cv2.imwrite(f"{self.mask_out_path}/{str(i).zfill(8)}.png", mask_to_save)
+
             self.mask_coords_list_cycle.append(crop_box)
             self.mask_list_cycle.append(mask)
 
@@ -240,7 +247,6 @@ class Avatar:
             ori_frame = copy.deepcopy(self.frame_list_cycle[idx_in_cycle])
             x1, y1, x2, y2 = bbox
 
-            # Ensure valid dimensions
             width = x2 - x1
             height = y2 - y1
             if width <= 0 or height <= 0:
@@ -250,7 +256,7 @@ class Avatar:
 
             try:
                 res_frame = res_frame.astype(np.uint8)
-                if res_frame.ndim == 2:
+                if res_frame.ndim == 2 or (res_frame.ndim == 3 and res_frame.shape[2] == 1):
                     res_frame = cv2.cvtColor(res_frame, cv2.COLOR_GRAY2BGR)
                 res_frame = cv2.resize(res_frame, (width, height))
 
