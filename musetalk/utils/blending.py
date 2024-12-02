@@ -1,8 +1,8 @@
 from PIL import Image
 import numpy as np
 import cv2
-import copy
 from face_parsing import FaceParsing
+import copy
 
 fp = FaceParsing()
 
@@ -85,16 +85,50 @@ def get_image_prepare_material(image,face_box,upper_boundary_ratio = 0.5,expand=
     mask_array = cv2.GaussianBlur(np.array(modified_mask_image), (blur_kernel_size, blur_kernel_size), 0)
     return mask_array,crop_box
 
-def get_image_blending(image,face,face_box,mask_array,crop_box):
-    body = image
+# def get_image_blending(image,face,face_box,mask_array,crop_box):
+#     body = Image.fromarray(image[:,:,::-1])
+#     face = Image.fromarray(face[:,:,::-1])
+
+#     x, y, x1, y1 = face_box
+#     x_s, y_s, x_e, y_e = crop_box
+#     face_large = body.crop(crop_box)
+
+#     mask_image = Image.fromarray(mask_array)
+#     mask_image = mask_image.convert("L")
+#     face_large.paste(face, (x-x_s, y-y_s, x1-x_s, y1-y_s))
+#     body.paste(face_large, crop_box[:2], mask_image)
+#     body = np.array(body)
+#     return body[:,:,::-1]
+
+import cv2
+import numpy as np
+import copy
+
+def get_image_blending(image, face, face_box, mask_array, crop_box):
+    body = image.copy()
     x, y, x1, y1 = face_box
     x_s, y_s, x_e, y_e = crop_box
-    face_large = copy.deepcopy(body[y_s:y_e, x_s:x_e])
-    face_large[y-y_s:y1-y_s, x-x_s:x1-x_s]=face
+    face_large = body[y_s:y_e, x_s:x_e].copy()
+    face_large[y - y_s : y1 - y_s, x - x_s : x1 - x_s] = face
 
-    mask_image = cv2.cvtColor(mask_array,cv2.COLOR_BGR2GRAY)
-    mask_image = (mask_image/255).astype(np.float32)
+    # Check if mask_array is already grayscale
+    if len(mask_array.shape) == 3 and mask_array.shape[2] == 3:
+        # If mask_array has 3 channels, convert it to grayscale
+        mask_image = cv2.cvtColor(mask_array, cv2.COLOR_BGR2GRAY)
+    else:
+        # If mask_array is already single-channel, use it directly
+        mask_image = mask_array
 
-    body[y_s:y_e, x_s:x_e] = cv2.blendLinear(face_large,body[y_s:y_e, x_s:x_e],mask_image,1-mask_image)
+    mask_image = (mask_image / 255).astype(np.float32)
+
+    # Ensure the dimensions match before blending
+    if face_large.shape[:2] != mask_image.shape[:2]:
+        mask_image = cv2.resize(mask_image, (face_large.shape[1], face_large.shape[0]))
+
+    # Perform blending
+    blended_region = cv2.blendLinear(face_large, body[y_s:y_e, x_s:x_e], mask_image, 1 - mask_image)
+
+    # Place the blended region back into the image
+    body[y_s:y_e, x_s:x_e] = blended_region
 
     return body
